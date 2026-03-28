@@ -1,0 +1,226 @@
+import express from "express";
+import Student from "../models/Student.js";
+import FacultyMark from "../models/FacultyMark.js";
+
+const router = express.Router();
+
+/* ================================
+   1️⃣ VIEW ALL MARKS FOR A SEMESTER (ADMIN)
+================================ */
+router.get("/marks/all/:semester", async (req, res) => {
+  try {
+    const { semester } = req.params;
+
+    const marks = await FacultyMark.find({ semester: Number(semester) });
+
+    if (!marks || marks.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No marks found for this semester",
+      });
+    }
+
+    res.json({
+      success: true,
+      marks,
+    });
+  } catch (error) {
+    console.error("Fetch all marks error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server Error",
+    });
+  }
+});
+
+/* ================================
+   2️⃣ ADMIN EDIT MARK
+================================ */
+router.put("/edit/:id", async (req, res) => {
+  try {
+    const mark = await FacultyMark.findById(req.params.id);
+
+    if (!mark) {
+      return res.status(404).json({
+        success: false,
+        message: "Mark not found",
+      });
+    }
+
+    if (mark.published) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot edit after publishing",
+      });
+    }
+
+    const { cia, practical } = req.body;
+    const total = Number(cia) + Number(practical);
+    const result = total >= 50 ? "Pass" : "Fail";
+
+    mark.cia = cia;
+    mark.practical = practical;
+    mark.total = total;
+    mark.result = result;
+    mark.verified = false;
+
+    await mark.save();
+
+    res.json({
+      success: true,
+      message: "Mark updated successfully. Verification reset.",
+      mark,
+    });
+  } catch (error) {
+    console.error("Edit mark error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server Error",
+    });
+  }
+});
+
+/* ================================
+   3️⃣ VERIFY INDIVIDUAL SUBJECT
+================================ */
+router.put("/verify/:id", async (req, res) => {
+  try {
+    const subject = await FacultyMark.findByIdAndUpdate(
+      req.params.id,
+      { $set: { verified: true } },
+      { new: true }
+    );
+
+    if (!subject) {
+      return res.status(404).json({
+        success: false,
+        message: "Subject not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Subject Verified Successfully",
+      subject,
+    });
+  } catch (error) {
+    console.error("Verify subject error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server Error",
+    });
+  }
+});
+
+/* ================================
+   4️⃣ VERIFY ALL SUBJECTS FOR STUDENT
+================================ */
+router.put("/verify-all/:regNo/:semester", async (req, res) => {
+  try {
+    const { regNo, semester } = req.params;
+
+    const unverifiedMarks = await FacultyMark.find({
+      regNo,
+      semester: Number(semester),
+      verified: false,
+    });
+
+    if (!unverifiedMarks || unverifiedMarks.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "All subjects are already verified",
+      });
+    }
+
+    await FacultyMark.updateMany(
+      { regNo, semester: Number(semester), verified: false },
+      { $set: { verified: true } }
+    );
+
+    res.json({
+      success: true,
+      message: `${unverifiedMarks.length} subjects verified successfully`,
+    });
+  } catch (error) {
+    console.error("Verify all subjects error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server Error",
+    });
+  }
+});
+
+/* ================================
+   5️⃣ PUBLISH RESULT
+================================ */
+router.put("/publish/:regNo/:semester", async (req, res) => {
+  try {
+    const { regNo, semester } = req.params;
+
+    const allSubjects = await FacultyMark.find({
+      regNo,
+      semester: Number(semester),
+    });
+
+    if (!allSubjects || allSubjects.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No subjects found",
+      });
+    }
+
+    const alreadyPublished = allSubjects.every((s) => s.published === true);
+    if (alreadyPublished) {
+      return res.status(400).json({
+        success: false,
+        message: "Results already published",
+      });
+    }
+
+    const allVerified = allSubjects.every((s) => s.verified === true);
+    if (!allVerified) {
+      return res.status(400).json({
+        success: false,
+        message: "All subjects are not verified yet",
+      });
+    }
+
+    const student = await Student.findOne({ regNo });
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: "Student not found",
+      });
+    }
+
+    student.results = allSubjects.map((s) => ({
+      code: s.subjectCode,
+      subject: s.subjectName,
+      cia: s.cia,
+      practical: s.practical,
+      total: s.total,
+      result: s.result,
+      semester: s.semester,
+    }));
+
+    await student.save();
+
+    await FacultyMark.updateMany(
+      { regNo, semester: Number(semester) },
+      { $set: { published: true } }
+    );
+
+    res.json({
+      success: true,
+      message: "Result Published Successfully",
+    });
+  } catch (error) {
+    console.error("Publish result error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server Error",
+    });
+  }
+});
+
+export default router;
